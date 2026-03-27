@@ -1,0 +1,13 @@
+[package]
+name = "nginx-qlog-adapter"
+description = "Adapter for converting nginx debug logs to qlog format"
+version = "0.1.0"
+edition = "2024"
+authors = ["Jakub Janeček <jakub.janecek@cdn77.com>"]
+
+[dependencies]
+serde = "1"
+serde_json = "1.0.149"
+chrono = "0.4.44"
+qlog = "0.16.0"
+clap = { version = "4", features = ["derive"] }
