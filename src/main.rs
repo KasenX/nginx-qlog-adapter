@@ -35,15 +35,22 @@ fn main() -> io::Result<()> {
     let args = Args::parse();
 
     let file = std::fs::File::open(&args.input)?;
-    let reader = io::BufReader::new(file);
+    let mut reader = io::BufReader::new(file);
 
     std::fs::create_dir_all(&args.output_dir)?;
 
     let mut connections: HashMap<u32, ConnState> = HashMap::new();
     let mut server_addr: Option<String> = None;
 
-    for line in reader.lines() {
-        let line = line?;
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let n = reader.read_until(b'\n', &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        let line = String::from_utf8_lossy(&buf);
+        let line = line.trim_end_matches('\n').trim_end_matches('\r');
         let Some(parsed) = parse_line(&line) else {
             continue;
         };
