@@ -115,8 +115,6 @@ pub(crate) struct ConnState {
     pub(crate) pending_send_packet_event_indices: Vec<usize>,
     /// ACK delay exponent negotiated with the remote peer (default 3).
     pub(crate) ack_delay_exponent: u64,
-    /// Last RTT snapshot — used to skip duplicate rtt_sample events.
-    pub(crate) last_rtt_snapshot: Option<(u64, u64, u64, u64)>,
     /// Slow-start threshold set by the most recent loss event.
     pub(crate) last_ssthresh: Option<u64>,
     /// Current path MTU (updated on `ack mtu:N`).
@@ -147,6 +145,20 @@ pub(crate) struct ConnState {
     pub(crate) connection_state: Option<ConnectionState>,
     /// Current PTO count (incremented by `pto app/init/hs pto_count:N`).
     pub(crate) pto_count: u16,
+    /// Last values emitted in a MetricsUpdated event, used to suppress unchanged fields.
+    pub(crate) last_emitted_metrics: EmittedMetrics,
+}
+
+#[derive(Default, Clone, PartialEq)]
+pub(crate) struct EmittedMetrics {
+    pub(crate) min_rtt: Option<u64>,
+    pub(crate) smoothed_rtt: Option<u64>,
+    pub(crate) latest_rtt: Option<u64>,
+    pub(crate) rtt_variance: Option<u64>,
+    pub(crate) pto_count: Option<u16>,
+    pub(crate) congestion_window: Option<u64>,
+    pub(crate) bytes_in_flight: Option<u64>,
+    pub(crate) ssthresh: Option<u64>,
 }
 
 impl Default for ConnState {
@@ -176,7 +188,6 @@ impl Default for ConnState {
             current_recv_packet_event_indices: Vec::new(),
             pending_send_packet_event_indices: Vec::new(),
             ack_delay_exponent: 3,
-            last_rtt_snapshot: None,
             last_ssthresh: None,
             current_mtu: 1200,
             reported_lost: HashSet::new(),
@@ -192,6 +203,7 @@ impl Default for ConnState {
             connection_state: None,
             pto_count: 0,
             server_addr: None,
+            last_emitted_metrics: EmittedMetrics::default(),
         }
     }
 }
@@ -222,17 +234,56 @@ impl ConnState {
     }
 
     pub(crate) fn push_metrics(&mut self, t: f64) {
+        let p = &self.last_emitted_metrics;
+        let diff = |cur: Option<u64>, prev: Option<u64>| if cur != prev { cur } else { None };
+
+        let min_rtt = diff(self.last_min_rtt, p.min_rtt);
+        let smoothed_rtt = diff(self.last_smoothed_rtt, p.smoothed_rtt);
+        let latest_rtt = diff(self.last_latest_rtt, p.latest_rtt);
+        let rtt_variance = diff(self.last_rtt_variance, p.rtt_variance);
+        let congestion_window = diff(self.last_cwnd, p.congestion_window);
+        let bytes_in_flight = diff(self.last_bytes_in_flight, p.bytes_in_flight);
+        let ssthresh = diff(self.last_ssthresh, p.ssthresh);
+        let pto_count = (p.pto_count != Some(self.pto_count)).then_some(self.pto_count);
+
+        if [
+            min_rtt,
+            smoothed_rtt,
+            latest_rtt,
+            rtt_variance,
+            congestion_window,
+            bytes_in_flight,
+            ssthresh,
+        ]
+        .iter()
+        .all(Option::is_none)
+            && pto_count.is_none()
+        {
+            return;
+        }
+
+        self.last_emitted_metrics = EmittedMetrics {
+            min_rtt: self.last_min_rtt,
+            smoothed_rtt: self.last_smoothed_rtt,
+            latest_rtt: self.last_latest_rtt,
+            rtt_variance: self.last_rtt_variance,
+            pto_count: Some(self.pto_count),
+            congestion_window: self.last_cwnd,
+            bytes_in_flight: self.last_bytes_in_flight,
+            ssthresh: self.last_ssthresh,
+        };
+
         self.push(
             t,
             EventData::MetricsUpdated(MetricsUpdated {
-                min_rtt: self.last_min_rtt.map(|v| v as f32),
-                smoothed_rtt: self.last_smoothed_rtt.map(|v| v as f32),
-                latest_rtt: Some(self.last_latest_rtt.unwrap_or(0) as f32),
-                rtt_variance: self.last_rtt_variance.map(|v| v as f32),
-                pto_count: Some(self.pto_count),
-                congestion_window: self.last_cwnd,
-                bytes_in_flight: self.last_bytes_in_flight,
-                ssthresh: self.last_ssthresh,
+                min_rtt: min_rtt.map(|v| v as f32),
+                smoothed_rtt: smoothed_rtt.map(|v| v as f32),
+                latest_rtt: latest_rtt.map(|v| v as f32),
+                rtt_variance: rtt_variance.map(|v| v as f32),
+                pto_count,
+                congestion_window,
+                bytes_in_flight,
+                ssthresh,
                 ..Default::default()
             }),
         );

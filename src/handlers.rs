@@ -516,19 +516,11 @@ pub(crate) fn handle_tp(state: &mut ConnState, t: f64, r: &str) {
 }
 
 pub(crate) fn handle_rtt_sample(state: &mut ConnState, t: f64, r: &str) {
-    let latest = extract_u64(r, "latest:");
-    let min = extract_u64(r, "min:");
-    let avg = extract_u64(r, "avg:");
-    let var = extract_u64(r, "var:");
-    let snapshot = (latest, min, avg, var);
-    state.last_latest_rtt = Some(latest);
-    state.last_min_rtt = Some(min);
-    state.last_smoothed_rtt = Some(avg);
-    state.last_rtt_variance = Some(var);
-    // Only emit metrics_updated when RTT values actually change.
-    if state.last_rtt_snapshot.replace(snapshot) != Some(snapshot) {
-        state.push_metrics(t);
-    }
+    state.last_latest_rtt = Some(extract_u64(r, "latest:"));
+    state.last_min_rtt = Some(extract_u64(r, "min:"));
+    state.last_smoothed_rtt = Some(extract_u64(r, "avg:"));
+    state.last_rtt_variance = Some(extract_u64(r, "var:"));
+    state.push_metrics(t);
 }
 
 pub(crate) fn handle_compat_secret(state: &mut ConnState, t: f64, r: &str) {
