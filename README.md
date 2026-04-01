@@ -19,10 +19,10 @@ cargo build --release
 ## Usage
 
 ```sh
-nginx-qlog-adapter <error.log> [-o <output_dir>]
+nginx-qlog-adapter <error.log> [-o <output_dir>] [--importance <level>]
 ```
 
-`-o` defaults to the current directory.
+`-o` defaults to the current directory, `--importance` defaults to `base` (see [draft-ietf-quic-qlog-main-schema-05](https://datatracker.ietf.org/doc/html/draft-ietf-quic-qlog-main-schema-05#name-event-importance-indicators) for details).
 
 ## nginx configuration
 
