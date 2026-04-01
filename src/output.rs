@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 
+use qlog::events::{EventImportance, Eventable};
 use qlog::{CommonFields, QLOG_VERSION, QlogSeq, TraceSeq, VantagePoint, VantagePointType};
 use serde::Serialize;
 
@@ -11,7 +12,11 @@ pub(crate) fn write_record(w: &mut impl Write, val: &impl Serialize) -> io::Resu
     w.write_all(b"\n")
 }
 
-pub(crate) fn write_jsonseq(state: &ConnState, w: &mut impl Write) -> io::Result<()> {
+pub(crate) fn write_jsonseq(
+    state: &ConnState,
+    w: &mut impl Write,
+    importance: EventImportance,
+) -> io::Result<()> {
     let qlog_seq = QlogSeq {
         qlog_version: QLOG_VERSION.to_string(),
         qlog_format: "JSON-SEQ".to_string(),
@@ -38,7 +43,9 @@ pub(crate) fn write_jsonseq(state: &ConnState, w: &mut impl Write) -> io::Result
 
     write_record(w, &qlog_seq)?;
     for event in &state.events {
-        write_record(w, event)?;
+        if event.importance().is_contained_in(&importance) {
+            write_record(w, event)?;
+        }
     }
 
     Ok(())

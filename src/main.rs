@@ -5,15 +5,32 @@ mod output;
 mod state;
 mod util;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use handlers::{parse_line, process};
 use output::write_jsonseq;
-use qlog::events::EventData;
+use qlog::events::{EventData, EventImportance};
 use state::ConnState;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
 use std::path::PathBuf;
 use util::parse_timestamp_ms;
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Importance {
+    Core,
+    Base,
+    Extra,
+}
+
+impl From<Importance> for EventImportance {
+    fn from(i: Importance) -> Self {
+        match i {
+            Importance::Core => EventImportance::Core,
+            Importance::Base => EventImportance::Base,
+            Importance::Extra => EventImportance::Extra,
+        }
+    }
+}
 
 /// Convert nginx QUIC debug logs to qlog (.sqlog) format.
 ///
@@ -29,6 +46,10 @@ struct Args {
     /// Directory where .sqlog output files will be written
     #[arg(short, long, default_value = ".")]
     output_dir: PathBuf,
+
+    /// Minimum event importance to include
+    #[arg(long, default_value = "base")]
+    importance: Importance,
 }
 
 fn main() -> io::Result<()> {
@@ -85,7 +106,7 @@ fn main() -> io::Result<()> {
         let cid = state.scid.clone().unwrap_or_else(|| id.to_string());
         let filename = args.output_dir.join(format!("{}.sqlog", cid));
         let mut f = io::BufWriter::new(std::fs::File::create(&filename)?);
-        write_jsonseq(state, &mut f)?;
+        write_jsonseq(state, &mut f, args.importance.into())?;
         eprintln!("wrote {}", filename.display());
     }
     Ok(())
