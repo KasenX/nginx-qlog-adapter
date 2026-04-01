@@ -51,7 +51,7 @@ fn main() -> io::Result<()> {
         }
         let line = String::from_utf8_lossy(&buf);
         let line = line.trim_end_matches('\n').trim_end_matches('\r');
-        let Some(parsed) = parse_line(&line) else {
+        let Some(parsed) = parse_line(line) else {
             continue;
         };
 
