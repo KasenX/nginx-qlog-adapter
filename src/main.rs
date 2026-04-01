@@ -12,7 +12,7 @@ use qlog::events::{EventData, EventImportance};
 use state::ConnState;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use util::parse_timestamp_ms;
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -91,23 +91,40 @@ fn main() -> io::Result<()> {
             ..Default::default()
         });
         process(state, time_ms, parsed.message);
+
+        if state.closed {
+            let state = connections
+                .remove(&conn_id)
+                .expect("entry() call just above");
+            flush_connection(conn_id, &state, &args.output_dir, args.importance)?;
+        }
     }
 
     for (id, state) in &connections {
-        let has_packets = state.events.iter().any(|e| {
-            matches!(
-                &e.data,
-                EventData::PacketReceived(_) | EventData::PacketSent(_)
-            )
-        });
-        if !has_packets {
-            continue;
-        }
-        let cid = state.scid.clone().unwrap_or_else(|| id.to_string());
-        let filename = args.output_dir.join(format!("{}.sqlog", cid));
-        let mut f = io::BufWriter::new(std::fs::File::create(&filename)?);
-        write_jsonseq(state, &mut f, args.importance.into())?;
-        eprintln!("wrote {}", filename.display());
+        flush_connection(*id, state, &args.output_dir, args.importance)?;
     }
+    Ok(())
+}
+
+fn flush_connection(
+    id: u32,
+    state: &ConnState,
+    output_dir: &Path,
+    importance: Importance,
+) -> io::Result<()> {
+    // Don't write a qlog file if there are no PacketSent or PacketReceived events
+    if !state.events.iter().any(|e| {
+        matches!(
+            &e.data,
+            EventData::PacketReceived(_) | EventData::PacketSent(_)
+        )
+    }) {
+        return Ok(());
+    }
+    let cid = state.scid.clone().unwrap_or_else(|| id.to_string());
+    let filename = output_dir.join(format!("{}.sqlog", cid));
+    let mut f = io::BufWriter::new(std::fs::File::create(&filename)?);
+    write_jsonseq(state, &mut f, importance.into())?;
+    eprintln!("wrote {}", filename.display());
     Ok(())
 }
