@@ -15,7 +15,7 @@ use crate::constants::{
     TIME_THRESHOLD, TIMER_GRANULARITY_MS,
 };
 use crate::frames::{
-    flags_to_packet_type, level_num_to_packet_type, level_to_packet_type,
+    PnSpace, flags_to_packet_type, level_num_to_packet_type, level_to_packet_type,
     packet_type_to_number_space, parse_frame, qlog_packet_number_space, token_from_length,
 };
 use crate::state::{CidInfo, ConnState, PendingRx, SentPacketRecord};
@@ -807,16 +807,48 @@ pub(crate) fn process(state: &mut ConnState, time_ms: f64, msg: &str) {
         }
     } else if let Some(r) = msg.strip_prefix("resend packet ") {
         let pnum = extract_u64(r, "pnum:");
-        if let Some(space) = state.lost_packet_spaces.get(&pnum).copied()
-            && state.marked_for_retransmit.insert((space, pnum))
-            && let Some(sent) = state.sent_packets.get(&(space, pnum))
-        {
-            state.push(
-                t,
-                EventData::MarkedForRetransmit(MarkedForRetransmit {
-                    frames: sent.frames.clone(),
-                }),
-            );
+        let space = state.lost_packet_spaces.get(&pnum).copied().or_else(|| {
+            [
+                PnSpace::ApplicationData,
+                PnSpace::Handshake,
+                PnSpace::Initial,
+            ]
+            .into_iter()
+            .find(|&s| state.sent_packets.contains_key(&(s, pnum)))
+        });
+        if let Some(space) = space {
+            if state.reported_lost.insert((space, pnum)) {
+                let sent = state.sent_packets.get(&(space, pnum)).cloned();
+                state.lost_packet_spaces.insert(pnum, space);
+                state.push(
+                    t,
+                    EventData::PacketLost(PacketLost {
+                        header: Some(sent.as_ref().map(|p| p.header.clone()).unwrap_or(
+                            PacketHeader {
+                                packet_type: match space {
+                                    PnSpace::Initial => PacketType::Initial,
+                                    PnSpace::Handshake => PacketType::Handshake,
+                                    PnSpace::ApplicationData => PacketType::OneRtt,
+                                },
+                                packet_number: Some(pnum),
+                                ..Default::default()
+                            },
+                        )),
+                        frames: sent.map(|p| p.frames),
+                        trigger: Some(PacketLostTrigger::ReorderingThreshold),
+                    }),
+                );
+            }
+            if state.marked_for_retransmit.insert((space, pnum))
+                && let Some(sent) = state.sent_packets.get(&(space, pnum))
+            {
+                state.push(
+                    t,
+                    EventData::MarkedForRetransmit(MarkedForRetransmit {
+                        frames: sent.frames.clone(),
+                    }),
+                );
+            }
         }
 
     // ── Security ─────────────────────────────────────────────────────────────
