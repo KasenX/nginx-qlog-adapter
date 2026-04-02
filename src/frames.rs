@@ -169,7 +169,7 @@ pub(crate) fn parse_frame(s: &str, ack_delay_exponent: u64) -> QuicFrame {
     }
     if let Some(r) = s.strip_prefix("MAX_DATA ") {
         return QuicFrame::MaxData {
-            maximum: extract_u64(r, "limit:"),
+            maximum: extract_u64(r, "max_data:"),
         };
     }
     if let Some(r) = s.strip_prefix("MAX_STREAMS ") {
