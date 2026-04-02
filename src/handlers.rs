@@ -2,9 +2,9 @@ use qlog::events::connectivity::{
     ConnectionClosedTrigger, ConnectionStarted, ConnectionState, MtuUpdated, TransportOwner,
 };
 use qlog::events::quic::{
-    AlpnInformation, DatagramsReceived, LossTimerEventType, LossTimerUpdated, MarkedForRetransmit,
-    PacketHeader, PacketLost, PacketLostTrigger, PacketReceived, PacketSent, PacketType,
-    PacketsAcked, QuicFrame, RecoveryParametersSet, TimerType, VersionInformation,
+    AckedRanges, AlpnInformation, DatagramsReceived, LossTimerEventType, LossTimerUpdated,
+    MarkedForRetransmit, PacketHeader, PacketLost, PacketLostTrigger, PacketReceived, PacketSent,
+    PacketType, PacketsAcked, QuicFrame, RecoveryParametersSet, TimerType, VersionInformation,
 };
 use qlog::events::security::{KeyType, KeyUpdateOrRetiredTrigger, KeyUpdated};
 use qlog::events::{EventData, RawInfo};
@@ -15,9 +15,8 @@ use crate::constants::{
     TIME_THRESHOLD, TIMER_GRANULARITY_MS,
 };
 use crate::frames::{
-    acked_ranges_to_packet_numbers, flags_to_packet_type, level_num_to_packet_type,
-    level_to_packet_type, packet_type_to_number_space, parse_frame, qlog_packet_number_space,
-    token_from_length,
+    flags_to_packet_type, level_num_to_packet_type, level_to_packet_type,
+    packet_type_to_number_space, parse_frame, qlog_packet_number_space, token_from_length,
 };
 use crate::state::{CidInfo, ConnState, PendingRx, SentPacketRecord};
 use crate::util::{extract_field, extract_i64, extract_u64, ip_version_str, non_empty, parse_addr};
@@ -305,22 +304,23 @@ pub(crate) fn handle_packet_done(state: &mut ConnState, t: f64, r: &str) {
         }
 
         let acked_packets = packet_number_space.as_ref().map(|space| {
-            frames
-                .iter()
-                .flat_map(|frame| match frame {
-                    QuicFrame::Ack {
-                        acked_ranges: Some(ranges),
-                        ..
-                    } => acked_ranges_to_packet_numbers(ranges)
-                        .into_iter()
-                        .filter(|acked| {
-                            state.sent_packets.contains_key(&(*space, *acked))
-                                && state.acknowledged_packets.insert((*space, *acked))
-                        })
-                        .collect::<Vec<_>>(),
-                    _ => Vec::new(),
-                })
-                .collect::<Vec<_>>()
+            let mut result = Vec::new();
+            for frame in &frames {
+                if let QuicFrame::Ack {
+                    acked_ranges: Some(AckedRanges::Double(ranges)),
+                    ..
+                } = frame
+                {
+                    for &(lo, hi) in ranges {
+                        for pn in lo..=hi {
+                            if state.sent_packets.remove(&(*space, pn)).is_some() {
+                                result.push(pn);
+                            }
+                        }
+                    }
+                }
+            }
+            result
         });
 
         if state.dcid.is_none()
@@ -420,7 +420,7 @@ pub(crate) fn handle_packet_tx(state: &mut ConnState, t: f64, r: &str) {
             && connection_id.is_empty()
             && let Some(info) = state.local_cids.get(&(*sequence_number as i64))
         {
-            fill_new_connection_id_frame(frame, info);
+            fill_new_connection_id_frame(&mut *frame, info);
         }
     }
 

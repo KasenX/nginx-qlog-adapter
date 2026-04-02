@@ -65,32 +65,6 @@ pub(crate) fn level_num_to_packet_type(n: u64) -> PacketType {
 }
 
 // ---------------------------------------------------------------------------
-// ACK range helpers
-// ---------------------------------------------------------------------------
-
-pub(crate) fn acked_ranges_to_packet_numbers(ranges: &AckedRanges) -> Vec<u64> {
-    let mut packets = Vec::new();
-    match ranges {
-        // parse_ack always produces [n] or [lo, hi] with lo ≤ hi.
-        AckedRanges::Single(ranges) => {
-            for range in ranges {
-                match range.as_slice() {
-                    [n] => packets.push(*n),
-                    [lo, hi] => packets.extend(*lo..=*hi),
-                    _ => {}
-                }
-            }
-        }
-        AckedRanges::Double(ranges) => {
-            for &(lo, hi) in ranges {
-                packets.extend(lo..=hi);
-            }
-        }
-    }
-    packets
-}
-
-// ---------------------------------------------------------------------------
 // Token helper
 // ---------------------------------------------------------------------------
 
@@ -259,22 +233,22 @@ fn parse_ack(r: &str, ack_delay_exponent: u64) -> QuicFrame {
     let delay =
         delay_str.parse::<u64>().unwrap_or(0) as f32 * (1u64 << ack_delay_exponent) as f32 / 1000.0;
 
-    let ranges: Vec<Vec<u64>> = ranges_str
+    let ranges: Vec<(u64, u64)> = ranges_str
         .split_whitespace()
         .filter_map(|tok| {
             if let Some((hi_str, lo_str)) = tok.rsplit_once('-') {
                 let hi: u64 = hi_str.parse().unwrap_or(0);
                 let lo: u64 = lo_str.parse().unwrap_or(0);
-                Some(if lo == hi { vec![lo] } else { vec![lo, hi] })
+                Some((lo, hi))
             } else {
-                tok.parse::<u64>().ok().map(|n| vec![n])
+                tok.parse::<u64>().ok().map(|n| (n, n))
             }
         })
         .collect();
 
     QuicFrame::Ack {
         ack_delay: Some(delay),
-        acked_ranges: Some(AckedRanges::Single(ranges)),
+        acked_ranges: Some(AckedRanges::Double(ranges)),
         ect1: None,
         ect0: None,
         ce: None,

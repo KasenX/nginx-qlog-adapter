@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use qlog::events::connectivity::{
     ConnectionClosed, ConnectionClosedTrigger, ConnectionIdUpdated, ConnectionState,
@@ -84,7 +84,7 @@ pub(crate) struct ConnState {
     pub(crate) client_addr: Option<String>,
     pub(crate) pending_rx: Option<PendingRx>,
     /// (level_name, packet_number) → frames
-    pub(crate) pending_tx: HashMap<(String, u64), Vec<QuicFrame>>,
+    pub(crate) pending_tx: FxHashMap<(String, u64), Vec<QuicFrame>>,
     pub(crate) pending_tp: TransportParams,
     pub(crate) closed: bool,
     pub(crate) last_latest_rtt: Option<u64>,
@@ -122,19 +122,18 @@ pub(crate) struct ConnState {
     /// Server's listen address, for connection_started.
     pub(crate) server_addr: Option<String>,
     /// Packet numbers already reported as lost, to avoid duplicates.
-    pub(crate) reported_lost: HashSet<(PnSpace, u64)>,
+    pub(crate) reported_lost: FxHashSet<(PnSpace, u64)>,
     /// Packets already marked for retransmission.
-    pub(crate) marked_for_retransmit: HashSet<(PnSpace, u64)>,
+    pub(crate) marked_for_retransmit: FxHashSet<(PnSpace, u64)>,
     /// Sent packets kept around so loss/ACK handling can reference their frames.
-    pub(crate) sent_packets: HashMap<(PnSpace, u64), SentPacketRecord>,
-    /// Packets already observed as acknowledged by the peer.
-    pub(crate) acknowledged_packets: HashSet<(PnSpace, u64)>,
+    /// Entries are removed when the peer acknowledges the packet.
+    pub(crate) sent_packets: FxHashMap<(PnSpace, u64), SentPacketRecord>,
     /// Most recent packet number space observed for a lost packet number.
-    pub(crate) lost_packet_spaces: HashMap<u64, PnSpace>,
+    pub(crate) lost_packet_spaces: FxHashMap<u64, PnSpace>,
     /// Locally-issued connection IDs keyed by their nginx sequence number.
-    pub(crate) local_cids: HashMap<i64, CidInfo>,
+    pub(crate) local_cids: FxHashMap<i64, CidInfo>,
     /// Remotely-advertised connection IDs keyed by sequence number.
-    pub(crate) remote_cids: HashMap<u32, CidInfo>,
+    pub(crate) remote_cids: FxHashMap<u32, CidInfo>,
     /// Last local socket sequence seen, used to pair the subsequent reset token.
     pub(crate) last_socket_seq: Option<i64>,
     /// Currently known local CID value.
@@ -168,7 +167,7 @@ impl Default for ConnState {
             start_time_ms: None,
             client_addr: None,
             pending_rx: None,
-            pending_tx: HashMap::new(),
+            pending_tx: FxHashMap::default(),
             pending_tp: TransportParams::default(),
             closed: false,
             last_latest_rtt: Some(0),
@@ -190,13 +189,12 @@ impl Default for ConnState {
             ack_delay_exponent: 3,
             last_ssthresh: None,
             current_mtu: 1200,
-            reported_lost: HashSet::new(),
-            marked_for_retransmit: HashSet::new(),
-            sent_packets: HashMap::new(),
-            acknowledged_packets: HashSet::new(),
-            lost_packet_spaces: HashMap::new(),
-            local_cids: HashMap::new(),
-            remote_cids: HashMap::new(),
+            reported_lost: FxHashSet::default(),
+            marked_for_retransmit: FxHashSet::default(),
+            sent_packets: FxHashMap::default(),
+            lost_packet_spaces: FxHashMap::default(),
+            local_cids: FxHashMap::default(),
+            remote_cids: FxHashMap::default(),
             last_socket_seq: None,
             current_local_cid: None,
             current_remote_cid: None,

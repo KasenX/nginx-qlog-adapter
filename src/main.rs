@@ -9,8 +9,8 @@ use clap::{Parser, ValueEnum};
 use handlers::{parse_line, process};
 use output::write_jsonseq;
 use qlog::events::{EventData, EventImportance};
+use rustc_hash::FxHashMap;
 use state::ConnState;
-use std::collections::HashMap;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 use util::parse_timestamp_ms;
@@ -60,7 +60,7 @@ fn main() -> io::Result<()> {
 
     std::fs::create_dir_all(&args.output_dir)?;
 
-    let mut connections: HashMap<u32, ConnState> = HashMap::new();
+    let mut connections: FxHashMap<u32, ConnState> = FxHashMap::default();
     let mut server_addr: Option<String> = None;
 
     let mut buf = Vec::new();
