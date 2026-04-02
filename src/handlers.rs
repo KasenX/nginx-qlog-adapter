@@ -760,6 +760,11 @@ pub(crate) fn process(state: &mut ConnState, time_ms: f64, msg: &str) {
         state.last_cwnd = Some(extract_u64(r, "win:"));
         state.last_bytes_in_flight = Some(extract_u64(r, "if:"));
         let ct = state.apply_internal_ts(time_ms, t_internal);
+        if r.starts_with("ss ") {
+            state.transition_congestion_state(ct, "slow_start");
+        } else if r.starts_with("cubic ") {
+            state.transition_congestion_state(ct, "congestion_avoidance");
+        }
         state.push_metrics(ct);
     } else if let Some(r) = msg.strip_prefix("congestion lost") {
         let is_new_loss = !r.trim_start().starts_with("rec");
@@ -770,6 +775,9 @@ pub(crate) fn process(state: &mut ConnState, time_ms: f64, msg: &str) {
             state.last_ssthresh = state.last_cwnd;
         }
         let ct = state.apply_internal_ts(time_ms, t_internal);
+        if is_new_loss {
+            state.transition_congestion_state(ct, "recovery");
+        }
         state.push_metrics(ct);
     } else if let Some(r) = msg.strip_prefix("lost timer pto:") {
         let delta = r.trim().parse::<f32>().ok();

@@ -5,7 +5,8 @@ use qlog::events::connectivity::{
     ConnectionStateUpdated, TransportOwner,
 };
 use qlog::events::quic::{
-    DatagramsSent, MetricsUpdated, PacketHeader, PacketType, QuicFrame, TransportParametersSet,
+    CongestionStateUpdated, DatagramsSent, MetricsUpdated, PacketHeader, PacketType, QuicFrame,
+    TransportParametersSet,
 };
 use qlog::events::{Event, EventData, RawInfo};
 
@@ -142,6 +143,8 @@ pub(crate) struct ConnState {
     pub(crate) current_remote_cid: Option<String>,
     /// Best-effort connection state progression.
     pub(crate) connection_state: Option<ConnectionState>,
+    /// Current congestion state ("slow_start", "congestion_avoidance", "recovery").
+    pub(crate) congestion_state: Option<String>,
     /// Current PTO count (incremented by `pto app/init/hs pto_count:N`).
     pub(crate) pto_count: u16,
     /// Last values emitted in a MetricsUpdated event, used to suppress unchanged fields.
@@ -199,6 +202,7 @@ impl Default for ConnState {
             current_local_cid: None,
             current_remote_cid: None,
             connection_state: None,
+            congestion_state: None,
             pto_count: 0,
             server_addr: None,
             last_emitted_metrics: EmittedMetrics::default(),
@@ -291,6 +295,22 @@ impl ConnState {
         let id = self.next_datagram_id;
         self.next_datagram_id += 1;
         id
+    }
+
+    pub(crate) fn transition_congestion_state(&mut self, t: f64, new: &str) {
+        if self.congestion_state.as_deref() == Some(new) {
+            return;
+        }
+        let old = self.congestion_state.clone();
+        self.congestion_state = Some(new.to_string());
+        self.push(
+            t,
+            EventData::CongestionStateUpdated(CongestionStateUpdated {
+                old,
+                new: new.to_string(),
+                trigger: None,
+            }),
+        );
     }
 
     pub(crate) fn transition_connection_state(&mut self, t: f64, new: ConnectionState) {
