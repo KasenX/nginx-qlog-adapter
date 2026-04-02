@@ -1,8 +1,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use qlog::events::connectivity::{
-    ConnectionClosed, ConnectionClosedTrigger, ConnectionIdUpdated, ConnectionState,
-    ConnectionStateUpdated, TransportOwner,
+    ConnectionClosed, ConnectionClosedTrigger, ConnectionIdUpdated, TransportOwner,
 };
 use qlog::events::quic::{
     CongestionStateUpdated, DatagramsSent, MetricsUpdated, PacketHeader, PacketType, QuicFrame,
@@ -141,8 +140,6 @@ pub(crate) struct ConnState {
     pub(crate) current_local_cid: Option<String>,
     /// Currently known remote CID value.
     pub(crate) current_remote_cid: Option<String>,
-    /// Best-effort connection state progression.
-    pub(crate) connection_state: Option<ConnectionState>,
     /// Current congestion state ("slow_start", "congestion_avoidance", "recovery").
     pub(crate) congestion_state: Option<String>,
     /// Current PTO count (incremented by `pto app/init/hs pto_count:N`).
@@ -201,7 +198,6 @@ impl Default for ConnState {
             last_socket_seq: None,
             current_local_cid: None,
             current_remote_cid: None,
-            connection_state: None,
             congestion_state: None,
             pto_count: 0,
             server_addr: None,
@@ -310,19 +306,6 @@ impl ConnState {
                 new: new.to_string(),
                 trigger: None,
             }),
-        );
-    }
-
-    pub(crate) fn transition_connection_state(&mut self, t: f64, new: ConnectionState) {
-        if self.connection_state.as_ref() == Some(&new) {
-            return;
-        }
-
-        let old = self.connection_state.clone();
-        self.connection_state = Some(new.clone());
-        self.push(
-            t,
-            EventData::ConnectionStateUpdated(ConnectionStateUpdated { old, new }),
         );
     }
 

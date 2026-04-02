@@ -1,5 +1,5 @@
 use qlog::events::connectivity::{
-    ConnectionClosedTrigger, ConnectionStarted, ConnectionState, MtuUpdated, TransportOwner,
+    ConnectionClosedTrigger, ConnectionStarted, MtuUpdated, TransportOwner,
 };
 use qlog::events::quic::{
     AckedRanges, AlpnInformation, DatagramsReceived, LossTimerEventType, LossTimerUpdated,
@@ -128,7 +128,6 @@ pub(crate) fn handle_connection_created(state: &mut ConnState, t: f64) {
             dst_cid,
         }),
     );
-    state.transition_connection_state(t, ConnectionState::Attempted);
 }
 
 pub(crate) fn handle_rx_long(state: &mut ConnState, r: &str, time_ms: f64) {
@@ -457,22 +456,6 @@ pub(crate) fn handle_packet_tx(state: &mut ConnState, t: f64, r: &str) {
         );
     }
 
-    if ptype == PacketType::Handshake
-        && matches!(
-            state.connection_state,
-            None | Some(ConnectionState::Attempted)
-        )
-    {
-        state.transition_connection_state(t, ConnectionState::HandshakeStarted);
-    }
-
-    if frames
-        .iter()
-        .any(|frame| matches!(frame, QuicFrame::HandshakeDone))
-    {
-        state.transition_connection_state(t, ConnectionState::HandshakeConfirmed);
-    }
-
     for frame in &frames {
         if let QuicFrame::NewConnectionId { connection_id, .. } = frame {
             state.update_connection_id(t, TransportOwner::Local, connection_id);
@@ -542,22 +525,6 @@ pub(crate) fn handle_compat_secret(state: &mut ConnState, t: f64, r: &str) {
             trigger: Some(KeyUpdateOrRetiredTrigger::Tls),
         }),
     );
-
-    match r.trim() {
-        "SERVER_TRAFFIC_SECRET_0" => {
-            if matches!(
-                state.connection_state,
-                None | Some(ConnectionState::Attempted)
-            ) {
-                state.transition_connection_state(t, ConnectionState::HandshakeStarted);
-            }
-            state.transition_connection_state(t, ConnectionState::EarlyWrite);
-        }
-        "CLIENT_TRAFFIC_SECRET_0" => {
-            state.transition_connection_state(t, ConnectionState::HandshakeCompleted);
-        }
-        _ => {}
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -633,7 +600,6 @@ pub(crate) fn process(state: &mut ConnState, time_ms: f64, msg: &str) {
         } else {
             ConnectionClosedTrigger::Error
         };
-        state.transition_connection_state(t, ConnectionState::Closing);
         state.push_closed(t, TransportOwner::Local, trigger);
     } else if let Some(r) = msg.strip_prefix("close silent ") {
         let trigger = if r.contains("timedout:1") {
@@ -641,13 +607,10 @@ pub(crate) fn process(state: &mut ConnState, time_ms: f64, msg: &str) {
         } else {
             ConnectionClosedTrigger::Clean
         };
-        state.transition_connection_state(t, ConnectionState::Closing);
         state.push_closed(t, TransportOwner::Local, trigger);
     } else if msg == "close completed" {
-        state.transition_connection_state(t, ConnectionState::Closed);
         state.push_closed(t, TransportOwner::Local, ConnectionClosedTrigger::Clean);
     } else if msg.starts_with("client timed out") {
-        state.transition_connection_state(t, ConnectionState::Closed);
         state.push_closed(
             t,
             TransportOwner::Local,
