@@ -458,7 +458,7 @@ pub(crate) fn handle_packet_tx(state: &mut ConnState, t: f64, r: &str) {
             (space, pn),
             SentPacketRecord {
                 header,
-                frames: frames.clone(),
+                event_idx,
             },
         );
     }
@@ -801,11 +801,12 @@ pub(crate) fn process(state: &mut ConnState, time_ms: f64, msg: &str) {
             state.push_packet_lost(t, space, pnum, PacketLostTrigger::ReorderingThreshold);
             if state.marked_for_retransmit.insert((space, pnum))
                 && let Some(sent) = state.sent_packets.get(&(space, pnum))
+                && let EventData::PacketSent(packet) = &state.events[sent.event_idx].data
             {
                 state.push(
                     t,
                     EventData::MarkedForRetransmit(MarkedForRetransmit {
-                        frames: sent.frames.clone(),
+                        frames: packet.frames.clone().unwrap_or_default().to_vec(),
                     }),
                 );
             }

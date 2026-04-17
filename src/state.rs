@@ -10,7 +10,7 @@ use qlog::events::quic::{
 use qlog::events::{Event, EventData, RawInfo};
 
 use crate::constants::INITIAL_RTT_MS;
-use crate::frames::{PnSpace, pnspace_to_packet_type};
+use crate::frames::{pnspace_to_packet_type, PnSpace};
 
 // ---------------------------------------------------------------------------
 // Pending receive buffer
@@ -71,7 +71,7 @@ pub(crate) struct CidInfo {
 #[derive(Clone)]
 pub(crate) struct SentPacketRecord {
     pub(crate) header: PacketHeader,
-    pub(crate) frames: Vec<QuicFrame>,
+    pub(crate) event_idx: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -459,11 +459,19 @@ impl ConnState {
             },
             |p| p.header.clone(),
         );
+        let frames = sent
+            .as_ref()
+            .and_then(|p| match &self.events[p.event_idx].data {
+                EventData::PacketSent(packet) => {
+                    packet.frames.clone().map(|frames| frames.to_vec())
+                }
+                _ => None,
+            });
         self.push(
             t,
             EventData::PacketLost(PacketLost {
                 header: Some(header),
-                frames: sent.map(|p| p.frames),
+                frames,
                 trigger: Some(trigger),
             }),
         );
