@@ -1,10 +1,12 @@
+use rustc_hash::FxHashMap;
+
 use qlog::events::connectivity::{
     ConnectionClosedTrigger, ConnectionStarted, MtuUpdated, TransportOwner,
 };
 use qlog::events::quic::{
     AckedRanges, AlpnInformation, DatagramsReceived, LossTimerEventType, LossTimerUpdated,
-    MarkedForRetransmit, PacketHeader, PacketLost, PacketLostTrigger, PacketReceived, PacketSent,
-    PacketType, PacketsAcked, QuicFrame, RecoveryParametersSet, TimerType, VersionInformation,
+    MarkedForRetransmit, PacketHeader, PacketLostTrigger, PacketReceived, PacketSent, PacketType,
+    PacketsAcked, QuicFrame, RecoveryParametersSet, TimerType, VersionInformation,
 };
 use qlog::events::security::{KeyType, KeyUpdateOrRetiredTrigger, KeyUpdated};
 use qlog::events::{EventData, RawInfo};
@@ -63,8 +65,36 @@ pub(crate) fn fill_new_connection_id_frame(frame: &mut QuicFrame, info: &CidInfo
         ..
     } = frame
     {
-        *connection_id = info.cid.clone();
-        *stateless_reset_token = info.stateless_reset_token.clone();
+        connection_id.clone_from(&info.cid);
+        stateless_reset_token.clone_from(&info.stateless_reset_token);
+    }
+}
+
+/// Back-fill a `NewConnectionId` frame's `connection_id` from the given CID map
+/// if it was parsed with an empty value. No-op for other frame types.
+fn try_fill_remote_cid(frame: &mut QuicFrame, remote_cids: &FxHashMap<u32, CidInfo>) {
+    if let QuicFrame::NewConnectionId {
+        sequence_number,
+        connection_id,
+        ..
+    } = frame
+        && connection_id.is_empty()
+        && let Some(info) = remote_cids.get(sequence_number)
+    {
+        fill_new_connection_id_frame(frame, info);
+    }
+}
+
+fn try_fill_local_cid(frame: &mut QuicFrame, local_cids: &FxHashMap<i64, CidInfo>) {
+    if let QuicFrame::NewConnectionId {
+        sequence_number,
+        connection_id,
+        ..
+    } = frame
+        && connection_id.is_empty()
+        && let Some(info) = local_cids.get(&(i64::from(*sequence_number)))
+    {
+        fill_new_connection_id_frame(frame, info);
     }
 }
 
@@ -130,9 +160,14 @@ pub(crate) fn handle_connection_created(state: &mut ConnState, t: f64) {
     );
 }
 
+/// Parse the leading hex byte of `r` (e.g. `"c1 version:1"` → `0xc1`).
+fn parse_leading_hex_byte(r: &str) -> u8 {
+    u8::from_str_radix(r.split_whitespace().next().unwrap_or(""), 16).unwrap_or(0)
+}
+
 pub(crate) fn handle_rx_long(state: &mut ConnState, r: &str, time_ms: f64) {
     // quic packet rx long flags:c1 version:1
-    let flags = u8::from_str_radix(r.split_whitespace().next().unwrap_or(""), 16).unwrap_or(0);
+    let flags = parse_leading_hex_byte(r);
     let version = extract_u64(r, "version:");
     state.pending_rx = Some(PendingRx {
         time_ms,
@@ -144,7 +179,7 @@ pub(crate) fn handle_rx_long(state: &mut ConnState, r: &str, time_ms: f64) {
 
 pub(crate) fn handle_rx_short(state: &mut ConnState, r: &str, time_ms: f64) {
     // quic packet rx short flags:4a
-    let flags = u8::from_str_radix(r.split_whitespace().next().unwrap_or(""), 16).unwrap_or(0);
+    let flags = parse_leading_hex_byte(r);
     // For 1RTT packets, raw.length = full UDP payload when this is the only packet in the datagram.
     let raw_length = (state.packets_since_recvmsg == 0)
         .then_some(state.recvmsg_size)
@@ -167,17 +202,7 @@ pub(crate) fn handle_frame_rx(state: &mut ConnState, r: &str) {
     let (pn_str, frame_str) = after.split_once(' ').unwrap_or((after, ""));
     let pn: u64 = pn_str.parse().unwrap_or(0);
     let mut frame = parse_frame(frame_str, state.ack_delay_exponent);
-
-    if let QuicFrame::NewConnectionId {
-        sequence_number,
-        connection_id,
-        ..
-    } = &frame
-        && connection_id.is_empty()
-        && let Some(info) = state.remote_cids.get(sequence_number)
-    {
-        fill_new_connection_id_frame(&mut frame, info);
-    }
+    try_fill_remote_cid(&mut frame, &state.remote_cids);
 
     let Some(p) = &mut state.pending_rx else {
         return;
@@ -290,16 +315,7 @@ pub(crate) fn handle_packet_done(state: &mut ConnState, t: f64, r: &str) {
         let mut frames = pending.frames;
 
         for frame in &mut frames {
-            if let QuicFrame::NewConnectionId {
-                sequence_number,
-                connection_id,
-                ..
-            } = frame
-                && connection_id.is_empty()
-                && let Some(info) = state.remote_cids.get(sequence_number)
-            {
-                fill_new_connection_id_frame(frame, info);
-            }
+            try_fill_remote_cid(frame, &state.remote_cids);
         }
 
         let acked_packets = packet_number_space.as_ref().map(|space| {
@@ -411,16 +427,7 @@ pub(crate) fn handle_packet_tx(state: &mut ConnState, t: f64, r: &str) {
     let ptype = level_to_packet_type(&level);
 
     for frame in &mut frames {
-        if let QuicFrame::NewConnectionId {
-            sequence_number,
-            connection_id,
-            ..
-        } = frame
-            && connection_id.is_empty()
-            && let Some(info) = state.local_cids.get(&(*sequence_number as i64))
-        {
-            fill_new_connection_id_frame(&mut *frame, info);
-        }
+        try_fill_local_cid(frame, &state.local_cids);
     }
 
     // bytes: is frame payload only; add QUIC header + AEAD overhead.
@@ -696,16 +703,7 @@ pub(crate) fn process(state: &mut ConnState, time_ms: f64, msg: &str) {
             let pn: u64 = after[..sp].parse().unwrap_or(0);
             let mut frame =
                 parse_frame(after.get(sp + 1..).unwrap_or(""), state.ack_delay_exponent);
-            if let QuicFrame::NewConnectionId {
-                sequence_number,
-                connection_id,
-                ..
-            } = &frame
-                && connection_id.is_empty()
-                && let Some(info) = state.local_cids.get(&(*sequence_number as i64))
-            {
-                fill_new_connection_id_frame(&mut frame, info);
-            }
+            try_fill_local_cid(&mut frame, &state.local_cids);
             state.pending_tx.entry((level, pn)).or_default().push(frame);
         }
     } else if let Some(r) = msg.strip_prefix("packet tx ") {
@@ -784,25 +782,8 @@ pub(crate) fn process(state: &mut ConnState, time_ms: f64, msg: &str) {
             let pnum = extract_u64(r, "pnum:");
             let lvl = extract_u64(r, "level:");
             let packet_type = level_num_to_packet_type(lvl);
-            if let Some(space) = packet_type_to_number_space(packet_type.clone()) {
-                state.lost_packet_spaces.insert(pnum, space);
-                if state.reported_lost.insert((space, pnum)) {
-                    let sent = state.sent_packets.get(&(space, pnum)).cloned();
-                    state.push(
-                        t,
-                        EventData::PacketLost(PacketLost {
-                            header: Some(sent.as_ref().map(|p| p.header.clone()).unwrap_or(
-                                PacketHeader {
-                                    packet_type,
-                                    packet_number: Some(pnum),
-                                    ..Default::default()
-                                },
-                            )),
-                            frames: sent.map(|p| p.frames),
-                            trigger: Some(PacketLostTrigger::TimeThreshold),
-                        }),
-                    );
-                }
+            if let Some(space) = packet_type_to_number_space(packet_type) {
+                state.push_packet_lost(t, space, pnum, PacketLostTrigger::TimeThreshold);
             }
         }
     } else if let Some(r) = msg.strip_prefix("resend packet ") {
@@ -817,28 +798,7 @@ pub(crate) fn process(state: &mut ConnState, time_ms: f64, msg: &str) {
             .find(|&s| state.sent_packets.contains_key(&(s, pnum)))
         });
         if let Some(space) = space {
-            if state.reported_lost.insert((space, pnum)) {
-                let sent = state.sent_packets.get(&(space, pnum)).cloned();
-                state.lost_packet_spaces.insert(pnum, space);
-                state.push(
-                    t,
-                    EventData::PacketLost(PacketLost {
-                        header: Some(sent.as_ref().map(|p| p.header.clone()).unwrap_or(
-                            PacketHeader {
-                                packet_type: match space {
-                                    PnSpace::Initial => PacketType::Initial,
-                                    PnSpace::Handshake => PacketType::Handshake,
-                                    PnSpace::ApplicationData => PacketType::OneRtt,
-                                },
-                                packet_number: Some(pnum),
-                                ..Default::default()
-                            },
-                        )),
-                        frames: sent.map(|p| p.frames),
-                        trigger: Some(PacketLostTrigger::ReorderingThreshold),
-                    }),
-                );
-            }
+            state.push_packet_lost(t, space, pnum, PacketLostTrigger::ReorderingThreshold);
             if state.marked_for_retransmit.insert((space, pnum))
                 && let Some(sent) = state.sent_packets.get(&(space, pnum))
             {

@@ -4,13 +4,13 @@ use qlog::events::connectivity::{
     ConnectionClosed, ConnectionClosedTrigger, ConnectionIdUpdated, TransportOwner,
 };
 use qlog::events::quic::{
-    CongestionStateUpdated, DatagramsSent, MetricsUpdated, PacketHeader, PacketType, QuicFrame,
-    TransportParametersSet,
+    CongestionStateUpdated, DatagramsSent, MetricsUpdated, PacketHeader, PacketLost,
+    PacketLostTrigger, PacketType, QuicFrame, TransportParametersSet,
 };
 use qlog::events::{Event, EventData, RawInfo};
 
 use crate::constants::INITIAL_RTT_MS;
-use crate::frames::PnSpace;
+use crate::frames::{PnSpace, pnspace_to_packet_type};
 
 // ---------------------------------------------------------------------------
 // Pending receive buffer
@@ -434,6 +434,40 @@ impl ConnState {
         }
 
         self.pending_send_packet_event_indices.clear();
+    }
+
+    /// Emit a `PacketLost` event at time `t` for `(space, pnum)` with the given trigger.
+    /// Deduplicates via `reported_lost`; returns `true` if a new event was pushed.
+    /// Uses frames from `sent_packets` when available, falling back to a minimal header.
+    pub(crate) fn push_packet_lost(
+        &mut self,
+        t: f64,
+        space: PnSpace,
+        pnum: u64,
+        trigger: PacketLostTrigger,
+    ) -> bool {
+        if !self.reported_lost.insert((space, pnum)) {
+            return false;
+        }
+        self.lost_packet_spaces.insert(pnum, space);
+        let sent = self.sent_packets.get(&(space, pnum)).cloned();
+        let header = sent.as_ref().map_or_else(
+            || PacketHeader {
+                packet_type: pnspace_to_packet_type(space),
+                packet_number: Some(pnum),
+                ..Default::default()
+            },
+            |p| p.header.clone(),
+        );
+        self.push(
+            t,
+            EventData::PacketLost(PacketLost {
+                header: Some(header),
+                frames: sent.map(|p| p.frames),
+                trigger: Some(trigger),
+            }),
+        );
+        true
     }
 
     pub(crate) fn push_closed(

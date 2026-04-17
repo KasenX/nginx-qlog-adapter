@@ -32,6 +32,14 @@ pub(crate) fn qlog_packet_number_space(space: PnSpace) -> PacketNumberSpace {
     }
 }
 
+pub(crate) fn pnspace_to_packet_type(space: PnSpace) -> PacketType {
+    match space {
+        PnSpace::Initial => PacketType::Initial,
+        PnSpace::Handshake => PacketType::Handshake,
+        PnSpace::ApplicationData => PacketType::OneRtt,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Packet type helpers
 // ---------------------------------------------------------------------------
